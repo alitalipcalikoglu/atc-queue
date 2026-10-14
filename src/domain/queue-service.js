@@ -1,4 +1,4 @@
-import { setTimeout as sleep } from 'node:timers/promises';
+import { EventEmitter } from 'node:events';
 import { QueueError } from './errors.js';
 import { QueueStore } from '../store/queue-store.js';
 
@@ -30,6 +30,8 @@ export class QueueService {
     this.now = now;
     /** Wakes long-polls on shutdown. */
     this.stopping = new AbortController();
+    /** Emits the queue name when messages arrive, so a long-poll in this process does not wait out its poll interval. */
+    this.wake = new EventEmitter().setMaxListeners(0);
   }
 
   /** @param {string} name @returns {QueueRow} */
@@ -92,7 +94,7 @@ export class QueueService {
       if (Buffer.byteLength(body) > this.limits.maxMessageBytes) throw new QueueError('MESSAGE_TOO_LARGE', `message body exceeds MAX_MESSAGE_BYTES (${this.limits.maxMessageBytes})`);
       return { ...m, body };
     });
-    return this.db.transaction(() => {
+    const out = this.db.transaction(() => {
       this.queue(queue);
       if (this.store.depth(queue) + items.length > this.limits.maxQueueDepth) throw new QueueError('QUEUE_FULL', `queue "${queue}" would exceed MAX_QUEUE_DEPTH (${this.limits.maxQueueDepth})`);
       const now = this.now();
@@ -101,6 +103,8 @@ export class QueueService {
         return { message: row, deduplicated };
       });
     });
+    this.wake.emit(queue);
+    return out;
   }
 
   /**
@@ -117,11 +121,22 @@ export class QueueService {
     const leaseMs = (visibilitySec ?? q.visibility_sec) * 1000;
     for (;;) {
       const current = this.queue(queue);
-      const got = current.paused ? [] : this.db.transaction(() => this.store.claim(queue, this.now(), max, leaseMs));
+      // Peek without the write lock first: N idle consumers polling an empty queue must not queue up for it.
+      const got = current.paused || !this.store.hasDue(queue, this.now()) ? [] : this.db.transaction(() => this.store.claim(queue, this.now(), max, leaseMs));
       if (got.length) { this.store.bump(queue, 'delivered', got.length); return got; }
       if (this.now() >= deadline || signal?.aborted || this.stopping.signal.aborted) return [];
-      await sleep(QueueService.POLL_MS, undefined, { signal: AbortSignal.any([this.stopping.signal, ...(signal ? [signal] : [])]) }).catch(() => {});
+      await this.#idle(queue, AbortSignal.any([this.stopping.signal, ...(signal ? [signal] : [])]));
     }
+  }
+
+  /** Wait up to POLL_MS, or until something is enqueued into `queue` in this process. @param {string} queue @param {AbortSignal} signal */
+  #idle(queue, signal) {
+    return new Promise((resolve) => {
+      const done = () => { clearTimeout(timer); this.wake.off(queue, done); signal.removeEventListener('abort', done); resolve(undefined); };
+      const timer = setTimeout(done, QueueService.POLL_MS);
+      this.wake.once(queue, done);
+      signal.addEventListener('abort', done, { once: true });
+    });
   }
 
   /** @param {string} queue @param {string} id @param {string} token */

@@ -27,7 +27,7 @@ and are reclaimed after their leases expire on the next start.
 `MAX_QUEUES` 500, `BODY_LIMIT` 2 x message size (≥ 1 MiB), `RATE_LIMIT_MAX` 6 000/min per key.
 
 ## Timeouts
-Long-poll ≤ `MAX_WAIT_SEC`, checked every 200 ms; ends when the client disconnects.
+Long-poll ≤ `MAX_WAIT_SEC`; an idle poll peeks with a read-only query every 200 ms (no write lock) and an enqueue in the same process wakes it at once; ends when the client disconnects.
 
 ## Retry policy
 For consumers: nack or lease expiry → backoff `base * 2^(attempts-1)` ≤ max; dead after

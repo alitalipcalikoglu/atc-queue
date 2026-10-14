@@ -122,3 +122,20 @@ test('long-poll waits for a message, pause holds deliveries, purge, delete, dead
   assert.equal(QueueStore.backoffMs(20, 5, 900), 900_000);
   void store;
 });
+
+test('long-poll: an idle poll takes no write lock, and an enqueue in the same process wakes it at once', async () => {
+  const { service, db } = testService();
+  service.putQueue('wake', {}, 'admin');
+  /** @type {string[]} */ const sql = [];
+  const raw = db.raw;
+  const exec = raw.exec.bind(raw);
+  raw.exec = (/** @type {string} */ q) => { sql.push(q); return exec(q); };
+  const t0 = Date.now();
+  const waiting = service.pull('wake', { waitSec: 5 }, undefined);
+  await new Promise((r) => setTimeout(r, 450));
+  assert.equal(sql.filter((q) => /BEGIN/i.test(q)).length, 0, 'no write transaction while the queue is empty');
+  service.enqueue('wake', [{ body: 'x' }], 'app');
+  const got = await waiting;
+  assert.equal(got.length, 1);
+  assert.ok(Date.now() - t0 < 1500, 'delivered right after the enqueue, not after the full wait');
+});

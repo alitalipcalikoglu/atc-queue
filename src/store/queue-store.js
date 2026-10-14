@@ -28,6 +28,7 @@ export class QueueStore {
       byDedupe: db.prepare(`SELECT ${M} FROM messages WHERE queue = ? AND dedupe_key = ?`),
       get: db.prepare(`SELECT ${M} FROM messages WHERE queue = ? AND id = ?`),
       depth: db.prepare('SELECT COUNT(*) AS n FROM messages WHERE queue = ?'),
+      hasDue: db.prepare(`SELECT 1 AS x FROM messages WHERE queue = ? AND state = 'ready' AND available_at <= ? LIMIT 1`),
       due: db.prepare(`SELECT ${M} FROM messages WHERE queue = ? AND state = 'ready' AND available_at <= ? ORDER BY priority DESC, available_at, seq LIMIT ?`),
       lease: db.prepare("UPDATE messages SET state = 'leased', attempts = attempts + 1, lease_token = ?, lease_until = ? WHERE seq = ? AND state = 'ready'"),
       ack: db.prepare(`DELETE FROM messages ${fenced}`),
@@ -89,6 +90,9 @@ export class QueueStore {
 
   /** @param {string} queue @param {string} id @returns {MessageRow|undefined} */
   get(queue, id) { return /** @type {MessageRow|undefined} */ (this.stmt.get.get(queue, id)); }
+
+  /** Read-only peek: is anything ready to lease? Takes no write lock, so idle long-polls stay cheap. @param {string} queue @param {number} now */
+  hasDue(queue, now) { return this.stmt.hasDue.get(queue, now) !== undefined; }
 
   /**
    * Lease up to `limit` due messages. Must run inside a transaction.
