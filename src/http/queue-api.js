@@ -186,8 +186,10 @@ export class QueueApi {
   /** @param {FastifyInstance} ops */
   #registerMetrics(ops) {
     ops.addHook('onRequest', this.auth.hook);
-    ops.get('/metrics', { logLevel: 'warn', preHandler: ApiKeyAuth.require('read') }, async (_request, reply) => {
-      const st = this.service.stats();
+    ops.get('/metrics', { logLevel: 'warn', preHandler: ApiKeyAuth.require('read') }, async (request, reply) => {
+      // A queue-scoped key sees only its queues here too, as in /v1/stats.
+      const scope = request.apiKey.queues;
+      const st = { items: this.service.stats().items.filter((i) => !scope || scope.includes(i.queue.name)) };
       const label = (/** @type {string} */ v) => v.replace(/[\\"\n]/g, '\\$&');
       reply.type('text/plain; version=0.0.4; charset=utf-8');
       return [

@@ -1,0 +1,104 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import { ADMIN_KEY, READ_KEY, RW_KEY, WORKER_KEY, bearer, buildApp } from './helpers.js';
+
+const json = (/** @type {import('light-my-request').Response} */ r) => JSON.parse(r.body);
+const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+
+test('API: probes, info, openapi, roles (read, write, admin) and queue scopes', async (t) => {
+  const { app } = await buildApp();
+  t.after(() => app.close());
+  assert.equal((await app.inject({ url: '/health' })).statusCode, 200);
+  assert.equal((await app.inject({ url: '/ready' })).statusCode, 200);
+  assert.equal((await app.inject({ url: '/openapi.yaml' })).body, readFileSync(new URL('../openapi.yaml', import.meta.url), 'utf8'));
+  const info = json(await app.inject({ url: '/v1/info' }));
+  assert.deepEqual([info.service, info.version], ['atc-queue', PACKAGE_VERSION]);
+  assert.equal((await app.inject({ url: '/v1/queues' })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'PUT', url: '/v1/queues/emails', headers: bearer(RW_KEY), payload: {} })).statusCode, 403, 'readwrite cannot manage queues');
+  assert.equal((await app.inject({ method: 'PUT', url: '/v1/queues/emails', headers: bearer(ADMIN_KEY), payload: {} })).statusCode, 201);
+  assert.equal((await app.inject({ method: 'PUT', url: '/v1/queues/reports', headers: bearer(ADMIN_KEY), payload: {} })).statusCode, 201);
+  assert.equal((await app.inject({ method: 'POST', url: '/v1/queues/emails/messages', headers: bearer(READ_KEY), payload: { body: 1 } })).statusCode, 403, 'read cannot enqueue');
+  assert.equal((await app.inject({ method: 'POST', url: '/v1/queues/emails/messages', headers: bearer(WORKER_KEY), payload: { body: 1 } })).statusCode, 201, 'scoped worker on its queue');
+  let res = await app.inject({ method: 'POST', url: '/v1/queues/reports/messages', headers: bearer(WORKER_KEY), payload: { body: 1 } });
+  assert.deepEqual([res.statusCode, json(res).error.message], [403, 'this API key has no access to queue "reports"']);
+  assert.equal((await app.inject({ url: '/v1/queues/emails/messages', headers: bearer(WORKER_KEY) })).statusCode, 403, 'write-only cannot browse');
+  assert.deepEqual(json(await app.inject({ url: '/v1/queues', headers: bearer(READ_KEY) })).items.map((/** @type {any} */ q) => q.name), ['emails', 'reports']);
+  await app.inject({ method: 'POST', url: '/v1/queues/reports/messages', headers: bearer(RW_KEY), payload: { body: 2 } });
+  const m = (await app.inject({ url: '/metrics', headers: bearer(READ_KEY) })).body;
+  assert.match(m, /^queue_messages\{queue="reports",state="ready"\} 1$/m);
+  assert.equal((await app.inject({ url: '/metrics', headers: bearer(WORKER_KEY) })).statusCode, 403, 'write-only key cannot read metrics');
+});
+
+test('API: /metrics and /v1/stats show a queue-scoped reader only its queues', async (t) => {
+  const SCOPED = 's'.repeat(40);
+  const { app } = await buildApp({ QUEUE_API_KEYS: `console:${ADMIN_KEY}:admin,mail-dash:${SCOPED}:read:emails` });
+  t.after(() => app.close());
+  for (const q of ['emails', 'secret-payroll']) await app.inject({ method: 'PUT', url: `/v1/queues/${q}`, headers: bearer(ADMIN_KEY), payload: {} });
+  await app.inject({ method: 'POST', url: '/v1/queues/secret-payroll/messages', headers: bearer(ADMIN_KEY), payload: { body: 1 } });
+  const m = (await app.inject({ url: '/metrics', headers: bearer(SCOPED) })).body;
+  assert.match(m, /queue="emails"/);
+  assert.doesNotMatch(m, /secret-payroll/, 'other queues are not visible in metrics');
+  assert.deepEqual(json(await app.inject({ url: '/v1/stats', headers: bearer(SCOPED) })).items.map((/** @type {any} */ i) => i.queue), ['emails']);
+  assert.deepEqual(json(await app.inject({ url: '/v1/queues', headers: bearer(SCOPED) })).items.map((/** @type {any} */ i) => i.name), ['emails']);
+  assert.match((await app.inject({ url: '/metrics', headers: bearer(ADMIN_KEY) })).body, /secret-payroll/);
+});
+
+test('API: produce, pull, ack, nack, extend, browse, dead letters, redrive, purge, delete', async (t) => {
+  const { app } = await buildApp();
+  t.after(() => app.close());
+  const a = bearer(ADMIN_KEY);
+  const w = bearer(RW_KEY);
+  assert.deepEqual(json(await app.inject({ method: 'PUT', url: '/v1/queues/jobs', headers: a, payload: { maxAttempts: 2, backoffBaseSec: 0, visibilitySec: 60, description: 'Jobs' } })).queue.maxAttempts, 2);
+  let res = await app.inject({ method: 'POST', url: '/v1/queues/jobs/messages', headers: w, payload: { body: { n: 1 }, priority: 1, dedupeKey: 'n1' } });
+  assert.equal(res.statusCode, 201);
+  const id = json(res).message.id;
+  res = await app.inject({ method: 'POST', url: '/v1/queues/jobs/messages', headers: w, payload: { body: { n: 'again' }, dedupeKey: 'n1' } });
+  assert.deepEqual([res.statusCode, json(res).deduplicated, json(res).message.id, json(res).message.body], [200, true, id, { n: 1 }]);
+  res = await app.inject({ method: 'POST', url: '/v1/queues/jobs/messages/batch', headers: w, payload: { messages: [{ body: 2 }, { body: 3, delaySec: 3600 }] } });
+  assert.equal(json(res).items.length, 2);
+  assert.equal(json(await app.inject({ url: '/v1/queues/jobs/messages?state=delayed', headers: w })).items[0].body, 3);
+  res = await app.inject({ method: 'POST', url: '/v1/queues/jobs/pull', headers: w, payload: { max: 5 } });
+  const leased = json(res).messages;
+  assert.deepEqual(leased.map((/** @type {any} */ m) => m.body), [{ n: 1 }, 2]);
+  assert.ok(leased.every((/** @type {any} */ m) => /^[0-9a-f-]{36}$/.test(m.leaseToken) && m.state === 'leased'));
+  assert.equal(json(await app.inject({ url: `/v1/queues/jobs/messages/${id}`, headers: w })).message.leaseToken, undefined, 'tokens are only returned to the puller');
+  assert.ok(json(await app.inject({ method: 'POST', url: `/v1/queues/jobs/messages/${id}/extend`, headers: w, payload: { leaseToken: leased[0].leaseToken, visibilitySec: 300 } })).leaseUntil);
+  assert.equal((await app.inject({ method: 'POST', url: `/v1/queues/jobs/messages/${id}/ack`, headers: w, payload: { leaseToken: leased[0].leaseToken } })).statusCode, 204);
+  res = await app.inject({ method: 'POST', url: `/v1/queues/jobs/messages/${id}/ack`, headers: w, payload: { leaseToken: leased[0].leaseToken } });
+  assert.deepEqual([res.statusCode, json(res).error.code], [404, 'MESSAGE_NOT_FOUND']);
+  const second = leased[1];
+  res = await app.inject({ method: 'POST', url: `/v1/queues/jobs/messages/${second.id}/nack`, headers: w, payload: { leaseToken: second.leaseToken, error: 'boom' } });
+  assert.deepEqual([json(res).outcome, json(res).message.state, json(res).message.lastError], ['retry', 'ready', 'boom']);
+  res = await app.inject({ method: 'POST', url: `/v1/queues/jobs/messages/${second.id}/nack`, headers: w, payload: { leaseToken: second.leaseToken } });
+  assert.deepEqual([res.statusCode, json(res).error.code], [409, 'LEASE_LOST']);
+  const again = json(await app.inject({ method: 'POST', url: '/v1/queues/jobs/pull', headers: w, payload: {} })).messages[0];
+  res = await app.inject({ method: 'POST', url: `/v1/queues/jobs/messages/${again.id}/nack`, headers: w, payload: { leaseToken: again.leaseToken } });
+  assert.equal(json(res).outcome, 'dead');
+  assert.equal(json(await app.inject({ url: '/v1/queues/jobs/messages?state=dead', headers: w })).items[0].id, second.id);
+  assert.equal((await app.inject({ method: 'POST', url: '/v1/queues/jobs/redrive', headers: w, payload: { all: true } })).statusCode, 403, 'redrive is admin');
+  assert.equal(json(await app.inject({ method: 'POST', url: '/v1/queues/jobs/redrive', headers: a, payload: {} })).error.code, 'INVALID_ARGUMENT');
+  assert.deepEqual(json(await app.inject({ method: 'POST', url: '/v1/queues/jobs/redrive', headers: a, payload: { ids: [second.id] } })), { redriven: 1 });
+  const q = json(await app.inject({ url: '/v1/queues/jobs', headers: bearer(READ_KEY) }));
+  assert.deepEqual(q.depth, { ready: 1, delayed: 1, leased: 0, dead: 0 });
+  assert.deepEqual([q.counters.enqueued, q.counters.acked, q.counters.dead, q.counters.redriven], [3, 1, 1, 1]);
+  const st = json(await app.inject({ url: '/v1/stats', headers: w }));
+  assert.deepEqual([st.queues, st.ready, st.delayed], [1, 1, 1]);
+  assert.equal((await app.inject({ method: 'DELETE', url: '/v1/queues/jobs', headers: a })).statusCode, 409, 'not empty');
+  assert.deepEqual(json(await app.inject({ method: 'POST', url: '/v1/queues/jobs/purge', headers: a, payload: { state: 'ready' } })), { removed: 2 });
+  assert.equal((await app.inject({ method: 'DELETE', url: '/v1/queues/jobs', headers: a })).statusCode, 204);
+  assert.equal((await app.inject({ url: '/v1/queues/jobs', headers: a })).statusCode, 404);
+});
+
+test('API: long-poll pull returns as soon as a message arrives; body caps', async (t) => {
+  const { app } = await buildApp({ MAX_MESSAGE_BYTES: '256' });
+  t.after(() => app.close());
+  await app.inject({ method: 'PUT', url: '/v1/queues/q', headers: bearer(ADMIN_KEY), payload: {} });
+  setTimeout(() => { app.inject({ method: 'POST', url: '/v1/queues/q/messages', headers: bearer(RW_KEY), payload: { body: 'hi' } }); }, 300);
+  const t0 = Date.now();
+  const res = await app.inject({ method: 'POST', url: '/v1/queues/q/pull', headers: bearer(RW_KEY), payload: { waitSec: 5 } });
+  assert.equal(json(res).messages[0].body, 'hi');
+  assert.ok(Date.now() - t0 < 2_000);
+  const big = await app.inject({ method: 'POST', url: '/v1/queues/q/messages', headers: bearer(RW_KEY), payload: { body: 'x'.repeat(500) } });
+  assert.deepEqual([big.statusCode, json(big).error.code], [413, 'MESSAGE_TOO_LARGE']);
+});
