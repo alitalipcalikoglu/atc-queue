@@ -1,4 +1,5 @@
 import { ConfigError, EnvReader, parseApiKeys, parseAudit } from '@atc-web/atc-service-core/config';
+import { EventPublisher } from './events/event-publisher.js';
 
 /** @typedef {import('./types.js').ApiKey} ApiKey */
 /** @typedef {import('./types.js').KeyRole} KeyRole */
@@ -18,6 +19,7 @@ export class Config {
     this.trustProxy = v.trustProxy;
     this.tls = v.tls;
     this.audit = v.audit;
+    this.webhookOut = v.webhookOut;
     this.bodyLimit = v.bodyLimit;
     this.dbPath = v.dbPath;
     this.dbBackupDir = v.dbBackupDir;
@@ -41,6 +43,7 @@ export class Config {
       trustProxy: r.boolean('TRUST_PROXY', false),
       tls: certPath ? { certPath, keyPath } : null,
       audit: parseAudit(r),
+      webhookOut: EventPublisher.parseEnv(r, ConfigError),
       // A batch of the largest messages must fit, plus JSON overhead.
       bodyLimit: r.integer('BODY_LIMIT', Math.max(1_048_576, maxMessageBytes * 2), { min: 16_384 }),
       dbPath: r.optional('DB_PATH') || './data/queue.db',

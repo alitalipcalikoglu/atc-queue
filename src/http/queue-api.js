@@ -29,10 +29,12 @@ export class QueueApi {
    * @param {string} deps.version
    * @param {import('../types.js').Logger} [deps.logger]
    * @param {import('@atc-web/atc-service-core/audit').AuditClient} [deps.audit]
+   * @param {import('../events/event-publisher.js').EventPublisher} [deps.publisher]
    */
-  constructor({ config, audit, service, db, version, logger }) {
+  constructor({ config, audit, publisher, service, db, version, logger }) {
     this.config = config;
     this.audit = audit;
+    this.publisher = publisher ?? null;
     this.service = service;
     this.db = db;
     this.version = version;
@@ -204,6 +206,7 @@ export class QueueApi {
         '# TYPE queue_events_total counter',
         ...st.items.flatMap((i) => Object.entries(/** @type {Record<string, number>} */ (i.counters)).map(([k, v]) => `queue_events_total{queue="${label(i.queue.name)}",event="${label(k)}"} ${v}`)),
         ...AuditMetrics.lines(this.audit),
+        ...(this.publisher?.metricLines() ?? []),
         '# HELP queue_process_uptime_seconds Process uptime.',
         '# TYPE queue_process_uptime_seconds gauge',
         `queue_process_uptime_seconds ${process.uptime().toFixed(0)}`,

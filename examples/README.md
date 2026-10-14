@@ -11,6 +11,7 @@ Scenario-driven walkthroughs of every feature. Requests to `/v1/*` need `Authori
 | [Operations on messages](maintenance.md) | Browsing by state, deleting one message, purging, retention |
 | [API keys, roles and scopes](keys-and-roles.md) | read, write, readwrite, admin; keys scoped to queues |
 | [Operations](operations.md) | Health, readiness, metrics, stats, PM2, Docker, backups |
+| [Events](events.md) | `ops.queue.dead_letter` and `ops.queue.dead_expired` through atc-webhook-out |
 | [Audit events](audit-events.md) | Which actions are forwarded to the audit service |
 
 ```bash

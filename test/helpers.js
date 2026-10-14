@@ -21,12 +21,12 @@ export function manualClock(start = 1_800_000_000_000) {
   return c;
 }
 
-/** @param {Record<string, string>} [overrides] @param {() => number} [now] */
-export function testService(overrides, now) {
+/** @param {Record<string, string>} [overrides] @param {() => number} [now] @param {any} [publisher] */
+export function testService(overrides, now, publisher) {
   const config = Config.fromEnv(testEnv(overrides));
   const db = new Database(':memory:');
   const store = new QueueStore(db);
-  const service = new QueueService({ db, store, limits: config.limits, now });
+  const service = new QueueService({ db, store, limits: config.limits, publisher, now });
   return { config, db, store, service };
 }
 

@@ -19,3 +19,9 @@ test('Config: rejects bad input', () => {
   bad({ MAX_WAIT_SEC: '60' }, /MAX_WAIT_SEC/);
   bad({ TLS_KEY_PATH: '/k.pem' }, /must be set together/);
 });
+
+test('Config: WEBHOOK_OUT_URL and WEBHOOK_OUT_API_KEY come together', () => {
+  assert.equal(Config.fromEnv(testEnv()).webhookOut, null);
+  assert.equal(Config.fromEnv(testEnv({ WEBHOOK_OUT_URL: 'http://h:3009/', WEBHOOK_OUT_API_KEY: 'k' })).webhookOut?.url, 'http://h:3009');
+  assert.throws(() => Config.fromEnv(testEnv({ WEBHOOK_OUT_URL: 'http://h' })), ConfigError);
+});

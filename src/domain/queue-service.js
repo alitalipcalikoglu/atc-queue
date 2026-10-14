@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { EventPublisher } from '../events/event-publisher.js';
 import { QueueError } from './errors.js';
 import { QueueStore } from '../store/queue-store.js';
 
@@ -21,12 +22,16 @@ export class QueueService {
    * @param {import('../db.js').Database} deps.db
    * @param {QueueStore} deps.store
    * @param {import('../types.js').Limits} deps.limits
+   * @param {import('../events/event-publisher.js').EventPublisher} [deps.publisher]
    * @param {() => number} [deps.now]
    */
-  constructor({ db, store, limits, now = Date.now }) {
+  constructor({ db, store, limits, publisher = new EventPublisher({ source: 'atc-queue', target: null }), now = Date.now }) {
     this.db = db;
     this.store = store;
     this.limits = limits;
+    this.publisher = publisher;
+    /** Dead-letter count per queue at the last maintenance; null until the first run (the backlog at start is not news). @type {Map<string, number>|null} */
+    this.deadSeen = null;
     this.now = now;
     /** Wakes long-polls on shutdown. */
     this.stopping = new AbortController();
@@ -221,7 +226,25 @@ export class QueueService {
     const now = this.now();
     const leases = this.store.reclaim(now);
     const expired = this.store.purgeDead(now - this.limits.deadRetentionDays * 86_400_000);
+    this.#announceDead(now, expired);
     return { ...leases, expired };
+  }
+
+  /**
+   * `ops.queue.dead_letter` per queue whose dead-letter count grew since the last run (one event per queue per run, however many
+   * messages died), and `ops.queue.dead_expired` when retention removed dead letters.
+   * @param {number} now @param {number} expired
+   */
+  #announceDead(now, expired) {
+    const seen = this.deadSeen;
+    const next = new Map();
+    for (const [queue, s] of this.store.summary(now)) {
+      next.set(queue, s.dead);
+      const grew = s.dead - (seen?.get(queue) ?? (seen ? 0 : s.dead));
+      if (grew > 0) this.publisher.publish('ops.queue.dead_letter', { queue, count: grew, dead: s.dead });
+    }
+    this.deadSeen = next;
+    if (expired > 0) this.publisher.publish('ops.queue.dead_expired', { removed: expired, retentionDays: this.limits.deadRetentionDays });
   }
 
   /** Every queue with depth by state, oldest due age and lifetime counters. */

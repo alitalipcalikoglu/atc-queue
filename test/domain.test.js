@@ -139,3 +139,28 @@ test('long-poll: an idle poll takes no write lock, and an enqueue in the same pr
   assert.equal(got.length, 1);
   assert.ok(Date.now() - t0 < 1500, 'delivered right after the enqueue, not after the full wait');
 });
+
+test('events: dead letters are announced once per queue and run, the backlog at start is not news, retention reports removals', async () => {
+  const clock = manualClock();
+  /** @type {[string, any][]} */ const out = [];
+  const publisher = { publish: (/** @type {string} */ t, /** @type {any} */ d) => { out.push([t, d]); return true; } };
+  const { service } = testService({ DEAD_RETENTION_DAYS: '1' }, clock.now, publisher);
+  service.putQueue('jobs', { maxAttempts: 1 }, 'x');
+  service.putQueue('mail', { maxAttempts: 1 }, 'x');
+  service.maintain();
+  assert.deepEqual(out, [], 'the first run only sets the baseline');
+  const kill = async (/** @type {string} */ q) => {
+    service.enqueue(q, [{ body: 1 }], 'app');
+    const [m] = await service.pull(q, {});
+    service.nack(q, m.id, /** @type {string} */ (m.lease_token), {});
+  };
+  await kill('jobs'); await kill('jobs'); await kill('mail');
+  service.maintain();
+  assert.deepEqual(out.map((/** @type {[string, any]} */ [t, d]) => `${t}:${d.queue}:${d.count}:${d.dead}`).sort(), ['ops.queue.dead_letter:jobs:2:2', 'ops.queue.dead_letter:mail:1:1']);
+  out.length = 0;
+  service.maintain();
+  assert.deepEqual(out, [], 'nothing new, nothing announced');
+  clock.advance(2 * 86_400_000);
+  service.maintain();
+  assert.deepEqual(out, [['ops.queue.dead_expired', { removed: 3, retentionDays: 1 }]]);
+});

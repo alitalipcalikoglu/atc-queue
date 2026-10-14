@@ -61,6 +61,7 @@ Producing, consuming with a worker loop, retries and dead letters, scoped keys: 
 | `DEAD_RETENTION_DAYS`, `REAP_MS` | `14`, `1000` | Dead-letter expiry; lease reaper interval |
 | `DB_PATH`, `DB_BACKUP_DIR`, `BODY_LIMIT`, `RATE_LIMIT_MAX` | `./data/queue.db`, –, 2 x message, `6000` | |
 | `TRUST_PROXY`, `TLS_CERT_PATH`, `TLS_KEY_PATH`, `LOG_LEVEL` | | As in every service |
+| `WEBHOOK_OUT_URL`, `WEBHOOK_OUT_API_KEY`, `WEBHOOK_OUT_TIMEOUT_MS` | empty, empty, `5000` | Publish events to atc-webhook-out (URL and key both or neither; a `publish` key) |
 | `AUDIT_URL`, `AUDIT_API_KEY` | empty | Forward audit events (both or neither) |
 
 ## Security notes
@@ -88,6 +89,10 @@ test/                      node:test suites
 - Message dedupe after a message is gone (keys are free once acked or deleted).
 - Clustering or replication; one process owns one SQLite file.
 
+## Events
+
+With `WEBHOOK_OUT_URL` set the service publishes `ops.queue.dead_letter` (per queue, when its dead-letter count grew since the last maintenance run) and `ops.queue.dead_expired` (dead letters removed by retention). Best effort; see [examples/events.md](examples/events.md).
+
 ## Audit events
 
 With `AUDIT_URL` and `AUDIT_API_KEY` set, management actions are forwarded (`success`, or `denied` on 403): `atc-queue.queue.upsert` (meta: created, settings), `atc-queue.queue.delete`, `atc-queue.queue.purge` (meta: state, removed), `atc-queue.message.redrive` (meta: redriven), `atc-queue.message.delete`. The data plane (enqueue, pull, ack, nack, extend) is not audited (high volume; visible in counters and metrics). Details: [examples/audit-events.md](examples/audit-events.md).
@@ -99,6 +104,8 @@ With `AUDIT_URL` and `AUDIT_API_KEY` set, management actions are forwarded (`suc
 ## Observability
 
 Request logs with request id and trace context; `/metrics` (depth by state, oldest due age, lifetime events); `/v1/stats`; `/ready`.
+
+Event publishing is observable as `events_publish_enabled`, `events_publish_total{result="published|sent|dropped|failed"}` and `events_publish_pending`.
 
 Audit forwarding is observable too: `audit_forward_enabled`, `audit_forward_events_total{result="recorded|sent|dropped|failed"}` and `audit_forward_pending`. A rising `dropped`, or a `pending` that does not drain, means audit events are being lost or delayed; alert on it.
 
