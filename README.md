@@ -100,6 +100,8 @@ With `AUDIT_URL` and `AUDIT_API_KEY` set, management actions are forwarded (`suc
 
 Request logs with request id and trace context; `/metrics` (depth by state, oldest due age, lifetime events); `/v1/stats`; `/ready`.
 
+Audit forwarding is observable too: `audit_forward_enabled`, `audit_forward_events_total{result="recorded|sent|dropped|failed"}` and `audit_forward_pending`. A rising `dropped`, or a `pending` that does not drain, means audit events are being lost or delayed; alert on it.
+
 ## Backup / restore
 
 The SQLite file at `DB_PATH`. `sqlite3 data/queue.db "VACUUM INTO 'backup.db'"` takes an online copy. After a restore, messages that were leased at backup time are redelivered once their leases expire.

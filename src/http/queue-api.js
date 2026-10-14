@@ -7,6 +7,7 @@ import { QueueError } from '../domain/errors.js';
 import { ApiKeyAuth } from './api-key-auth.js';
 import { Schemas } from './schemas.js';
 import { Views } from './views.js';
+import { AuditMetrics } from '../audit-metrics.js';
 
 /** @typedef {import('../config.js').Config} Config */
 /** @typedef {import('fastify').FastifyInstance} FastifyInstance */
@@ -202,6 +203,7 @@ export class QueueApi {
         '# HELP queue_events_total Lifetime message events by queue (persisted).',
         '# TYPE queue_events_total counter',
         ...st.items.flatMap((i) => Object.entries(/** @type {Record<string, number>} */ (i.counters)).map(([k, v]) => `queue_events_total{queue="${label(i.queue.name)}",event="${label(k)}"} ${v}`)),
+        ...AuditMetrics.lines(this.audit),
         '# HELP queue_process_uptime_seconds Process uptime.',
         '# TYPE queue_process_uptime_seconds gauge',
         `queue_process_uptime_seconds ${process.uptime().toFixed(0)}`,
