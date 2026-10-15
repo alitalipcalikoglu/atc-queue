@@ -47,5 +47,11 @@ export class Database extends CoreDatabase {
       PRIMARY KEY (queue, name)
     );
     `,
+    `
+    -- Push delivery (PUSH_SECRETS_KEY): due messages are POSTed to push_url, signed with the sealed push_secret.
+    ALTER TABLE queues ADD COLUMN push_url TEXT;
+    ALTER TABLE queues ADD COLUMN push_secret TEXT;
+    ALTER TABLE queues ADD COLUMN push_concurrency INTEGER NOT NULL DEFAULT 1;
+    `,
   ];
 }

@@ -23,9 +23,11 @@ export class QueueService {
    * @param {QueueStore} deps.store
    * @param {import('../types.js').Limits} deps.limits
    * @param {import('../events/event-publisher.js').EventPublisher} [deps.publisher]
+   * @param {{ guard: import('@atc-web/atc-service-core/http').NetGuard, box: import('@atc-web/atc-service-core/secrets').SecretBox }|null} [deps.push]  Push delivery; null = off.
    * @param {() => number} [deps.now]
    */
-  constructor({ db, store, limits, publisher = new EventPublisher({ source: 'atc-queue', target: null }), now = Date.now }) {
+  constructor({ db, store, limits, publisher = new EventPublisher({ source: 'atc-queue', target: null }), push = null, now = Date.now }) {
+    this.push = push;
     this.db = db;
     this.store = store;
     this.limits = limits;
@@ -37,6 +39,8 @@ export class QueueService {
     this.stopping = new AbortController();
     /** Emits the queue name when messages arrive, so a long-poll in this process does not wait out its poll interval. */
     this.wake = new EventEmitter().setMaxListeners(0);
+    /** Emits `queue` with the queue name after every enqueue (push delivery listens). */
+    this.enqueued = new EventEmitter();
   }
 
   /** @param {string} name @returns {QueueRow} */
@@ -49,7 +53,7 @@ export class QueueService {
   /**
    * Create or update a queue's settings; omitted fields keep their value (or the default).
    * @param {string} name
-   * @param {{ description?: string, visibilitySec?: number, maxAttempts?: number, backoffBaseSec?: number, backoffMaxSec?: number, paused?: boolean }} input
+   * @param {{ description?: string, visibilitySec?: number, maxAttempts?: number, backoffBaseSec?: number, backoffMaxSec?: number, paused?: boolean, push?: { url: string, secret?: string, concurrency?: number }|null }} input
    * @param {string} actor
    * @returns {{ queue: QueueRow, created: boolean }}
    */
@@ -69,11 +73,30 @@ export class QueueService {
         backoff_max_sec: input.backoffMaxSec ?? cur?.backoff_max_sec ?? d.backoffMaxSec,
         paused: input.paused === undefined ? (cur?.paused ?? 0) : input.paused ? 1 : 0,
         created_by: cur?.created_by ?? actor, created_at: cur?.created_at ?? now, updated_at: now,
+        ...this.#pushSettings(input.push, cur),
       };
       if (row.backoff_max_sec < row.backoff_base_sec) throw new QueueError('INVALID_ARGUMENT', 'backoffMaxSec must be >= backoffBaseSec');
       this.store.upsertQueue(row);
       return { queue: this.queue(name), created: !cur };
     });
+  }
+
+  /**
+   * Push columns for a queue: `undefined` keeps the current ones, `null` switches back to pull mode.
+   * @param {{ url: string, secret?: string, concurrency?: number }|null|undefined} push @param {QueueRow|undefined} cur
+   */
+  #pushSettings(push, cur) {
+    if (push === undefined) return { push_url: cur?.push_url ?? null, push_secret: cur?.push_secret ?? null, push_concurrency: cur?.push_concurrency ?? 1 };
+    if (push === null) return { push_url: null, push_secret: null, push_concurrency: 1 };
+    if (!this.push) throw new QueueError('PUSH_DISABLED', 'push delivery is off on this server (PUSH_SECRETS_KEY is not set)');
+    try {
+      this.push.guard.check(push.url);
+    } catch (err) {
+      throw new QueueError('INVALID_PUSH_URL', err instanceof Error ? err.message : String(err));
+    }
+    const sealed = push.secret !== undefined ? this.push.box.seal(push.secret) : cur?.push_secret;
+    if (!sealed) throw new QueueError('INVALID_ARGUMENT', 'push.secret is required when push is first configured');
+    return { push_url: push.url, push_secret: sealed, push_concurrency: push.concurrency ?? cur?.push_concurrency ?? 1 };
   }
 
   /** Refuses a queue that still holds messages unless `force`. @param {string} name @param {boolean} force */
@@ -109,6 +132,7 @@ export class QueueService {
       });
     });
     this.wake.emit(queue);
+    this.enqueued.emit('queue', queue);
     return out;
   }
 
@@ -121,6 +145,7 @@ export class QueueService {
    */
   async pull(queue, { max = 1, visibilitySec, waitSec = 0 }, signal) {
     const q = this.queue(queue);
+    if (q.push_url) throw new QueueError('INVALID_STATE', `queue "${queue}" delivers by push; switch it back with push: null to pull`);
     if (max > this.limits.maxBatch) throw new QueueError('LIMIT_EXCEEDED', `at most ${this.limits.maxBatch} messages per pull`);
     const deadline = this.now() + Math.min(waitSec, this.limits.maxWaitSec) * 1000;
     const leaseMs = (visibilitySec ?? q.visibility_sec) * 1000;

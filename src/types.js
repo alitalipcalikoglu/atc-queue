@@ -38,9 +38,20 @@
  * @property {ApiKey[]} apiKeys
  * @property {number} rateLimitMax
  * @property {Limits} limits
+ * @property {PushConfig|null} push  Push delivery to HTTP endpoints; null = off (PUSH_SECRETS_KEY unset).
  */
 
 /** @typedef {'ready'|'leased'|'dead'} MessageState */
+
+/**
+ * @typedef {object} PushConfig
+ * @property {Buffer} secretsKey     Encrypts each queue's push signing secret at rest.
+ * @property {boolean} allowHttp      Permit http:// push URLs.
+ * @property {boolean} allowPrivate   Permit push URLs on private or loopback addresses.
+ * @property {string[]} allowedHosts  Host allowlist (exact or parent domain); empty = any public host.
+ * @property {number} timeoutMs       Per delivery.
+ * @property {number} intervalMs      How often push queues are scanned for due messages.
+ */
 
 /**
  * @typedef {object} QueueRow
@@ -50,7 +61,10 @@
  * @property {number} max_attempts     Deliveries before a message is dead-lettered.
  * @property {number} backoff_base_sec
  * @property {number} backoff_max_sec
- * @property {number} paused           1 = pulls return nothing.
+ * @property {number} paused           1 = pulls return nothing (and nothing is pushed).
+ * @property {string|null} push_url    Push mode: due messages are POSTed here; pulls are refused.
+ * @property {string|null} push_secret Sealed (SecretBox) signing secret.
+ * @property {number} push_concurrency Deliveries in flight at once.
  * @property {string} created_by
  * @property {number} created_at
  * @property {number} updated_at

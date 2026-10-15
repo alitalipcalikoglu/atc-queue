@@ -7,7 +7,7 @@ export class Views {
 
   /** @param {import('../types.js').QueueRow} q */
   static queue(q) {
-    return { name: q.name, description: q.description, visibilitySec: Number(q.visibility_sec), maxAttempts: Number(q.max_attempts), backoffBaseSec: Number(q.backoff_base_sec), backoffMaxSec: Number(q.backoff_max_sec), paused: q.paused === 1, createdBy: q.created_by, createdAt: Views.iso(q.created_at), updatedAt: Views.iso(q.updated_at) };
+    return { name: q.name, description: q.description, visibilitySec: Number(q.visibility_sec), maxAttempts: Number(q.max_attempts), backoffBaseSec: Number(q.backoff_base_sec), backoffMaxSec: Number(q.backoff_max_sec), paused: q.paused === 1, push: q.push_url ? { url: q.push_url, concurrency: Number(q.push_concurrency) } : null, createdBy: q.created_by, createdAt: Views.iso(q.created_at), updatedAt: Views.iso(q.updated_at) };
   }
 
   /** @param {import('../types.js').MessageRow} m @param {number} now @param {{ token?: boolean }} [o] */

@@ -30,8 +30,10 @@ export class QueueApi {
    * @param {import('../types.js').Logger} [deps.logger]
    * @param {import('@atc-web/atc-service-core/audit').AuditClient} [deps.audit]
    * @param {import('../events/event-publisher.js').EventPublisher} [deps.publisher]
+   * @param {import('../domain/pusher.js').Pusher|null} [deps.pusher]
    */
-  constructor({ config, audit, publisher, service, db, version, logger }) {
+  constructor({ config, audit, publisher, service, db, version, logger, pusher = null }) {
+    this.pusher = pusher;
     this.config = config;
     this.audit = audit;
     this.publisher = publisher ?? null;
@@ -66,10 +68,20 @@ export class QueueApi {
     });
     registerProbes(app, () => this.db.ping(), { cacheMs: QueueApi.READY_CACHE_MS });
     registerOpenApi(app, new URL('../../openapi.yaml', import.meta.url));
-    registerInfo(app, { service: 'atc-queue', version: this.version, capabilities: ['leases', 'delays', 'priorities', 'dedupe', 'dead-letters', 'long-poll', 'queue-scoped-keys'], schemaVersion: this.db.schemaVersion });
+    registerInfo(app, { service: 'atc-queue', version: this.version, capabilities: ['leases', 'delays', 'priorities', 'dedupe', 'dead-letters', 'long-poll', 'queue-scoped-keys', ...(this.pusher ? ['push'] : [])], schemaVersion: this.db.schemaVersion });
     await app.register((api) => this.#registerV1(api), { prefix: '/v1' });
     await app.register((ops) => this.#registerMetrics(ops));
     return app;
+  }
+
+  /**
+   * Queue settings for the audit trail, without the push signing secret.
+   * @param {unknown} body
+   */
+  static redact(body) {
+    const b = /** @type {{ push?: { secret?: string }|null }|null} */ (body);
+    if (!b?.push?.secret) return b;
+    return { ...b, push: { ...b.push, secret: '[redacted]' } };
   }
 
   /** @param {FastifyInstance} api */
@@ -97,7 +109,7 @@ export class QueueApi {
       return { items: st.items.filter((i) => visible(request, i.queue.name)).map((i) => ({ ...Views.queue(i.queue), ready: i.ready, delayed: i.delayed, leased: i.leased, dead: i.dead, oldestReadySec: i.oldestReadyMs === null ? null : Math.floor(i.oldestReadyMs / 1000) })) };
     });
 
-    api.put('/queues/:name', { config: { audit: AuditClient.route('atc-queue.queue.upsert', target, (r, b) => ({ created: b.created, settings: r.body })) }, ...admin, schema: { params: Schemas.queueParams, body: Schemas.putQueue } }, async (request, reply) => {
+    api.put('/queues/:name', { config: { audit: AuditClient.route('atc-queue.queue.upsert', target, (r, b) => ({ created: b.created, settings: QueueApi.redact(r.body) })) }, ...admin, schema: { params: Schemas.queueParams, body: Schemas.putQueue } }, async (request, reply) => {
       const { queue, created } = s.putQueue(q(request), /** @type {any} */ (request.body ?? {}), request.apiKey.id);
       return reply.code(created ? 201 : 200).send({ created, queue: Views.queue(queue) });
     });
@@ -207,6 +219,7 @@ export class QueueApi {
         ...st.items.flatMap((i) => Object.entries(/** @type {Record<string, number>} */ (i.counters)).map(([k, v]) => `queue_events_total{queue="${label(i.queue.name)}",event="${label(k)}"} ${v}`)),
         ...AuditMetrics.lines(this.audit),
         ...(this.publisher?.metricLines() ?? []),
+        ...(this.pusher ? ['# HELP queue_push_deliveries_total Push deliveries since start, by result.', '# TYPE queue_push_deliveries_total counter', `queue_push_deliveries_total{result="ok"} ${this.pusher.counters.delivered}`, `queue_push_deliveries_total{result="failed"} ${this.pusher.counters.failed}`] : []),
         '# HELP queue_process_uptime_seconds Process uptime.',
         '# TYPE queue_process_uptime_seconds gauge',
         `queue_process_uptime_seconds ${process.uptime().toFixed(0)}`,

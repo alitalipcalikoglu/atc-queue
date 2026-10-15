@@ -4,7 +4,7 @@ With `AUDIT_URL` / `AUDIT_API_KEY` set, management actions are forwarded (`succe
 
 | Action | Request | `meta` |
 |---|---|---|
-| `atc-queue.queue.upsert` | `PUT /v1/queues/:name` | `created`, `settings` |
+| `atc-queue.queue.upsert` | `PUT /v1/queues/:name` | `created`, `settings` (`push.secret` replaced by `[redacted]`) |
 | `atc-queue.queue.delete` | `DELETE /v1/queues/:name` | |
 | `atc-queue.queue.purge` | `POST /v1/queues/:name/purge` | `state`, `removed` |
 | `atc-queue.message.redrive` | `POST /v1/queues/:name/redrive` | `redriven` |

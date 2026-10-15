@@ -14,6 +14,15 @@ export class Schemas {
       backoffBaseSec: { type: 'integer', minimum: 0, maximum: 86_400 },
       backoffMaxSec: { type: 'integer', minimum: 0, maximum: 604_800 },
       paused: { type: 'boolean' },
+      push: {
+        anyOf: [
+          { type: 'null' },
+          {
+            type: 'object', additionalProperties: false, required: ['url'],
+            properties: { url: { type: 'string', minLength: 8, maxLength: 2_048 }, secret: { type: 'string', minLength: 32, maxLength: 256 }, concurrency: { type: 'integer', minimum: 1, maximum: 32 } },
+          },
+        ],
+      },
     },
   };
   static message = {

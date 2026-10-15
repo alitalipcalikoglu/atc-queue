@@ -7,6 +7,9 @@ import { QueueService } from './domain/queue-service.js';
 import { QueueApi } from './http/queue-api.js';
 import { QueueStore } from './store/queue-store.js';
 import { EventPublisher } from './events/event-publisher.js';
+import { NetGuard } from '@atc-web/atc-service-core/http';
+import { SecretBox } from '@atc-web/atc-service-core/secrets';
+import { Pusher } from './domain/pusher.js';
 
 /** Composition root: wires configuration, storage, domain and HTTP, runs the lease reaper, owns the lifecycle. */
 export class Application {
@@ -18,7 +21,10 @@ export class Application {
     this.publisher = new EventPublisher({ source: 'atc-queue', target: config.webhookOut });
     this.db = new Database(config.dbPath, { backupDir: config.dbBackupDir });
     this.store = new QueueStore(this.db);
-    this.service = new QueueService({ db: this.db, store: this.store, limits: config.limits, publisher: this.publisher });
+    const p = config.push;
+    const push = p ? { guard: new NetGuard({ allowHttp: p.allowHttp, allowPrivate: p.allowPrivate, allowedHosts: p.allowedHosts }), box: new SecretBox(p.secretsKey) } : null;
+    this.service = new QueueService({ db: this.db, store: this.store, limits: config.limits, publisher: this.publisher, push });
+    this.pusher = p && push ? new Pusher({ service: this.service, guard: push.guard, box: push.box, options: { timeoutMs: p.timeoutMs, intervalMs: p.intervalMs }, log: /** @type {any} */ (console) }) : null;
     /** @type {import('fastify').FastifyInstance|null} */
     this.app = null;
     /** @type {NodeJS.Timeout|null} */
@@ -42,7 +48,7 @@ export class Application {
 
   async start() {
     const { config } = this;
-    const app = await new QueueApi({ config, audit: this.audit, publisher: this.publisher, service: this.service, db: this.db, version: this.version }).build();
+    const app = await new QueueApi({ config, audit: this.audit, publisher: this.publisher, service: this.service, pusher: this.pusher, db: this.db, version: this.version }).build();
     this.app = app;
     const maintain = () => {
       try {
@@ -59,6 +65,7 @@ export class Application {
       steps: [
         () => { if (this.timer) clearInterval(this.timer); this.service.stopping.abort(); },
         () => this.app?.close(),
+        () => this.pusher?.stop(),
         () => this.publisher.close(),
         () => this.audit.close(),
         () => this.db.close(),
@@ -70,6 +77,7 @@ export class Application {
     this.audit.start();
     await app.listen({ port: config.port, host: config.host });
     app.log.info({ tls: config.tls !== null, queues: this.store.queueCount() }, config.tls ? 'serving HTTPS' : 'serving plain HTTP, terminate TLS at a reverse proxy');
+    if (this.pusher) { this.pusher.log = app.log.child({ component: 'push' }); this.pusher.start(); }
     if (process.send) process.send('ready'); // PM2 wait_ready
   }
 }

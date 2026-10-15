@@ -22,6 +22,7 @@ Tests and type check: `npm test`, `npm run typecheck`.
 - **Message**: JSON body, `priority`, optional `delaySec` and `dedupeKey`. States: `ready` (due), `delayed` (ready, not yet due), `leased`, `dead`.
 - **Pull** leases due messages (priority, then oldest) for `visibilitySec`; every delivery is an attempt. **Ack** deletes; **nack** makes it visible after `delaySec` or the backoff, or dead when attempts are used up (or `dead: true`); **extend** moves the lease end. An expired lease counts as a failed delivery.
 - **Dead letters** stay until redriven (attempts reset), deleted, purged or `DEAD_RETENTION_DAYS`.
+- **Push** (optional, `PUSH_SECRETS_KEY` set): a queue with `push: { url, secret, concurrency }` is delivered by the service itself. Due messages are leased and POSTed to `url` as `{ id, queue, attempt, priority, enqueuedAt, body }`, signed in `x-queue-signature` (`t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>`, the webhook-out format). 2xx acks; any other answer or a timeout nacks, so backoff, `maxAttempts` and dead letters work as for pulls. Pulls on a push queue answer `409 INVALID_STATE`; `push: null` switches back. The secret is stored encrypted and never returned; the URL is SSRF-checked (https and public addresses unless `PUSH_ALLOW_HTTP` / `PUSH_ALLOW_PRIVATE`) and its address pinned per delivery.
 - **Dedupe**: while a message with the key is in the queue, enqueuing the key again returns that message (`deduplicated: true`).
 
 ## API
@@ -61,6 +62,9 @@ Producing, consuming with a worker loop, retries and dead letters, scoped keys: 
 | `DEAD_RETENTION_DAYS`, `REAP_MS` | `14`, `1000` | Dead-letter expiry; lease reaper interval |
 | `DB_PATH`, `DB_BACKUP_DIR`, `BODY_LIMIT`, `RATE_LIMIT_MAX` | `./data/queue.db`, –, 2 x message, `6000` | |
 | `TRUST_PROXY`, `TLS_CERT_PATH`, `TLS_KEY_PATH`, `LOG_LEVEL` | | As in every service |
+| `PUSH_SECRETS_KEY` | empty | 64 hex chars; turns push delivery on and encrypts the per-queue signing secrets |
+| `PUSH_ALLOW_HTTP`, `PUSH_ALLOW_PRIVATE`, `PUSH_ALLOWED_HOSTS` | `false`, `false`, empty | Push targets: allow plain http, private/loopback addresses, restrict to these hosts (and subdomains) |
+| `PUSH_TIMEOUT_MS`, `PUSH_INTERVAL_MS` | `10000`, `500` | Per delivery; how often push queues are scanned (an enqueue also starts delivery at once) |
 | `WEBHOOK_OUT_URL`, `WEBHOOK_OUT_API_KEY`, `WEBHOOK_OUT_TIMEOUT_MS` | empty, empty, `5000` | Publish events to atc-webhook-out (URL and key both or neither; a `publish` key) |
 | `AUDIT_URL`, `AUDIT_API_KEY` | empty | Forward audit events (both or neither) |
 
@@ -85,7 +89,7 @@ test/                      node:test suites
 ## Out of scope by design
 
 - Exactly-once delivery, FIFO groups and strict per-key ordering (priority, then due time, then arrival is the order).
-- Push delivery to HTTP endpoints (use atc-webhook-out), topics and fan-out.
+- Topics and fan-out (one message to several endpoints): use atc-webhook-out. Push delivery sends each message to one queue's URL.
 - Message dedupe after a message is gone (keys are free once acked or deleted).
 - Clustering or replication; one process owns one SQLite file.
 

@@ -26,6 +26,7 @@ export class Config {
     this.apiKeys = v.apiKeys;
     this.rateLimitMax = v.rateLimitMax;
     this.limits = Object.freeze({ ...v.limits });
+    this.push = v.push;
     Object.freeze(this);
   }
 
@@ -59,7 +60,26 @@ export class Config {
         deadRetentionDays: r.integer('DEAD_RETENTION_DAYS', 14, { min: 1 }),
         reapMs: r.integer('REAP_MS', 1_000, { min: 100 }),
       },
+      push: Config.#push(r),
     });
+  }
+
+  /**
+   * Push delivery: on when `PUSH_SECRETS_KEY` is set (it encrypts the per-queue signing secrets at rest).
+   * @param {EnvReader} r @returns {import('./types.js').PushConfig|null}
+   */
+  static #push(r) {
+    const hex = r.optional('PUSH_SECRETS_KEY');
+    if (!hex) return null;
+    if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new ConfigError('PUSH_SECRETS_KEY must be 64 hex characters (32 bytes); generate with: openssl rand -hex 32');
+    return {
+      secretsKey: Buffer.from(hex, 'hex'),
+      allowHttp: r.boolean('PUSH_ALLOW_HTTP', false),
+      allowPrivate: r.boolean('PUSH_ALLOW_PRIVATE', false),
+      allowedHosts: r.list('PUSH_ALLOWED_HOSTS', '').map((h) => h.toLowerCase()),
+      timeoutMs: r.integer('PUSH_TIMEOUT_MS', 10_000, { min: 500, max: 120_000 }),
+      intervalMs: r.integer('PUSH_INTERVAL_MS', 500, { min: 50, max: 60_000 }),
+    };
   }
 
   /**

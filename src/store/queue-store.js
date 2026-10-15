@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
  * never get the same message; every lease-holder write is fenced on the lease token.
  */
 export class QueueStore {
-  static Q = 'name, description, visibility_sec, max_attempts, backoff_base_sec, backoff_max_sec, paused, created_by, created_at, updated_at';
+  static Q = 'name, description, visibility_sec, max_attempts, backoff_base_sec, backoff_max_sec, paused, created_by, created_at, updated_at, push_url, push_secret, push_concurrency';
   static M = 'seq, id, queue, body, priority, dedupe_key, state, attempts, available_at, lease_token, lease_until, last_error, enqueued_by, enqueued_at, dead_at';
 
   /** @param {Database} db */
@@ -18,8 +18,10 @@ export class QueueStore {
     const { Q, M } = QueueStore;
     const fenced = "WHERE queue = ? AND id = ? AND lease_token = ? AND state = 'leased'";
     this.stmt = {
-      upsertQueue: db.prepare(`INSERT INTO queues (${Q}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(name) DO UPDATE SET description = excluded.description, visibility_sec = excluded.visibility_sec, max_attempts = excluded.max_attempts, backoff_base_sec = excluded.backoff_base_sec, backoff_max_sec = excluded.backoff_max_sec, paused = excluded.paused, updated_at = excluded.updated_at`),
+      upsertQueue: db.prepare(`INSERT INTO queues (${Q}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET description = excluded.description, visibility_sec = excluded.visibility_sec, max_attempts = excluded.max_attempts, backoff_base_sec = excluded.backoff_base_sec, backoff_max_sec = excluded.backoff_max_sec, paused = excluded.paused, updated_at = excluded.updated_at,
+          push_url = excluded.push_url, push_secret = excluded.push_secret, push_concurrency = excluded.push_concurrency`),
+      pushQueues: db.prepare(`SELECT ${Q} FROM queues WHERE push_url IS NOT NULL AND paused = 0 ORDER BY name`),
       queue: db.prepare(`SELECT ${Q} FROM queues WHERE name = ?`),
       queues: db.prepare(`SELECT ${Q} FROM queues ORDER BY name`),
       queueCount: db.prepare('SELECT COUNT(*) AS n FROM queues'),
@@ -59,8 +61,11 @@ export class QueueStore {
 
   /** @param {QueueRow} q */
   upsertQueue(q) {
-    this.stmt.upsertQueue.run(q.name, q.description, q.visibility_sec, q.max_attempts, q.backoff_base_sec, q.backoff_max_sec, q.paused, q.created_by, q.created_at, q.updated_at);
+    this.stmt.upsertQueue.run(q.name, q.description, q.visibility_sec, q.max_attempts, q.backoff_base_sec, q.backoff_max_sec, q.paused, q.created_by, q.created_at, q.updated_at, q.push_url, q.push_secret, q.push_concurrency);
   }
+
+  /** Unpaused queues in push mode. @returns {QueueRow[]} */
+  pushQueues() { return /** @type {QueueRow[]} */ (this.stmt.pushQueues.all()); }
 
   /** @param {string} name @returns {QueueRow|undefined} */
   queue(name) { return /** @type {QueueRow|undefined} */ (this.stmt.queue.get(name)); }
