@@ -6,7 +6,12 @@ leased pulls (ack/nack/extend), retries with exponential backoff, dead letters w
 Delivery is at least once.
 
 ## Dependencies
-`atc-audit` (optional, management events, buffered off the request path). Nothing else.
+`atc-audit` (optional, management events, buffered off the request path) and `atc-webhook-out`
+(optional, `ops.queue.dead_letter` and `ops.queue.dead_expired` events through a publish-role key, best effort from a bounded in-memory queue).
+Push subscriptions call the receiver URLs operators configure: https on public addresses unless
+`PUSH_ALLOW_HTTP`/`PUSH_ALLOW_PRIVATE` are set, private targets only together with
+`PUSH_ALLOWED_HOSTS` (checked again after DNS resolution), link-local and cloud metadata
+addresses refused regardless. Nothing else.
 
 ## Persistence
 SQLite at `DB_PATH` (`./data/queue.db`; Docker `/data/queue.db`), WAL. Tables: `queues`, `messages`
