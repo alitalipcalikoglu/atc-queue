@@ -72,11 +72,15 @@ export class Config {
     const hex = r.optional('PUSH_SECRETS_KEY');
     if (!hex) return null;
     if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new ConfigError('PUSH_SECRETS_KEY must be 64 hex characters (32 bytes); generate with: openssl rand -hex 32');
+    const allowPrivate = r.boolean('PUSH_ALLOW_PRIVATE', false);
+    const allowedHosts = r.list('PUSH_ALLOWED_HOSTS', '').map((h) => h.toLowerCase());
+    // Private targets only for named hosts: never "any internal address".
+    if (allowPrivate && allowedHosts.length === 0) throw new ConfigError('PUSH_ALLOWED_HOSTS is required when PUSH_ALLOW_PRIVATE is true');
     return {
       secretsKey: Buffer.from(hex, 'hex'),
       allowHttp: r.boolean('PUSH_ALLOW_HTTP', false),
-      allowPrivate: r.boolean('PUSH_ALLOW_PRIVATE', false),
-      allowedHosts: r.list('PUSH_ALLOWED_HOSTS', '').map((h) => h.toLowerCase()),
+      allowPrivate,
+      allowedHosts,
       timeoutMs: r.integer('PUSH_TIMEOUT_MS', 10_000, { min: 500, max: 120_000 }),
       intervalMs: r.integer('PUSH_INTERVAL_MS', 500, { min: 50, max: 60_000 }),
     };

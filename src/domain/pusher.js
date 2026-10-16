@@ -19,7 +19,7 @@ export class Pusher {
   /**
    * @param {object} deps
    * @param {import('./queue-service.js').QueueService} deps.service
-   * @param {import('@atc-web/atc-service-core/http').NetGuard} deps.guard
+   * @param {import('../net/push-guard.js').PushGuard} deps.guard
    * @param {import('@atc-web/atc-service-core/secrets').SecretBox} deps.box
    * @param {{ timeoutMs: number, intervalMs: number }} deps.options
    * @param {{ warn: (obj: object, msg: string) => void }} deps.log

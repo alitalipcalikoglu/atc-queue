@@ -14,6 +14,8 @@ PUSH_ALLOWED_HOSTS=workers.internal
 
 Without `PUSH_SECRETS_KEY` a `push` setting answers `400 PUSH_DISABLED`. By default only `https` URLs on public addresses are accepted (`400 INVALID_PUSH_URL` otherwise); the address is resolved and pinned on every delivery, so a DNS change cannot point it at an internal host.
 
+Private receivers need both settings: `PUSH_ALLOW_PRIVATE=true` alone stops the service at startup (`PUSH_ALLOWED_HOSTS is required when PUSH_ALLOW_PRIVATE is true`), because "any internal address" would let any admin key reach every internal service. After DNS resolution a private address is accepted only for a host on `PUSH_ALLOWED_HOSTS`; link-local addresses (169.254.0.0/16, fe80::/10) and cloud metadata endpoints (169.254.169.254 and others) are refused even when listed. A refused delivery counts as a failed attempt with the reason in `lastError`.
+
 ## Switch a queue to push (admin key)
 
 ```bash

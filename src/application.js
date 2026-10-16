@@ -7,7 +7,7 @@ import { QueueService } from './domain/queue-service.js';
 import { QueueApi } from './http/queue-api.js';
 import { QueueStore } from './store/queue-store.js';
 import { EventPublisher } from './events/event-publisher.js';
-import { NetGuard } from '@atc-web/atc-service-core/http';
+import { PushGuard } from './net/push-guard.js';
 import { SecretBox } from '@atc-web/atc-service-core/secrets';
 import { Pusher } from './domain/pusher.js';
 
@@ -22,7 +22,7 @@ export class Application {
     this.db = new Database(config.dbPath, { backupDir: config.dbBackupDir });
     this.store = new QueueStore(this.db);
     const p = config.push;
-    const push = p ? { guard: new NetGuard({ allowHttp: p.allowHttp, allowPrivate: p.allowPrivate, allowedHosts: p.allowedHosts }), box: new SecretBox(p.secretsKey) } : null;
+    const push = p ? { guard: new PushGuard({ allowHttp: p.allowHttp, allowPrivate: p.allowPrivate, allowedHosts: p.allowedHosts }), box: new SecretBox(p.secretsKey) } : null;
     this.service = new QueueService({ db: this.db, store: this.store, limits: config.limits, publisher: this.publisher, push });
     this.pusher = p && push ? new Pusher({ service: this.service, guard: push.guard, box: push.box, options: { timeoutMs: p.timeoutMs, intervalMs: p.intervalMs }, log: /** @type {any} */ (console) }) : null;
     /** @type {import('fastify').FastifyInstance|null} */

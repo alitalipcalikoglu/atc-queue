@@ -23,7 +23,7 @@ export class QueueService {
    * @param {QueueStore} deps.store
    * @param {import('../types.js').Limits} deps.limits
    * @param {import('../events/event-publisher.js').EventPublisher} [deps.publisher]
-   * @param {{ guard: import('@atc-web/atc-service-core/http').NetGuard, box: import('@atc-web/atc-service-core/secrets').SecretBox }|null} [deps.push]  Push delivery; null = off.
+   * @param {{ guard: import('../net/push-guard.js').PushGuard, box: import('@atc-web/atc-service-core/secrets').SecretBox }|null} [deps.push]  Push delivery; null = off.
    * @param {() => number} [deps.now]
    */
   constructor({ db, store, limits, publisher = new EventPublisher({ source: 'atc-queue', target: null }), push = null, now = Date.now }) {

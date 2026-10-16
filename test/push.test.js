@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { after, before, test } from 'node:test';
-import { NetGuard, Signer } from '@atc-web/atc-service-core/http';
+import { Signer } from '@atc-web/atc-service-core/http';
+import { PushGuard } from '../src/net/push-guard.js';
 import { SecretBox } from '@atc-web/atc-service-core/secrets';
 import { Config } from '../src/config.js';
 import { Database } from '../src/db.js';
@@ -33,11 +34,11 @@ before(async () => {
 after(() => { server.closeAllConnections(); server.close(); });
 
 async function system(env = {}) {
-  const config = Config.fromEnv(testEnv({ PUSH_SECRETS_KEY: KEY_HEX, PUSH_ALLOW_HTTP: 'true', PUSH_ALLOW_PRIVATE: 'true', PUSH_TIMEOUT_MS: '2000', ...env }));
+  const config = Config.fromEnv(testEnv({ PUSH_SECRETS_KEY: KEY_HEX, PUSH_ALLOW_HTTP: 'true', PUSH_ALLOW_PRIVATE: 'true', PUSH_ALLOWED_HOSTS: '127.0.0.1', PUSH_TIMEOUT_MS: '2000', ...env }));
   const db = new Database(':memory:');
   const store = new QueueStore(db);
   const p = /** @type {import('../src/types.js').PushConfig} */ (config.push);
-  const push = { guard: new NetGuard({ allowHttp: p.allowHttp, allowPrivate: p.allowPrivate }), box: new SecretBox(p.secretsKey) };
+  const push = { guard: new PushGuard({ allowHttp: p.allowHttp, allowPrivate: p.allowPrivate, allowedHosts: p.allowedHosts }), box: new SecretBox(p.secretsKey) };
   const service = new QueueService({ db, store, limits: config.limits, push });
   const pusher = new Pusher({ service, guard: push.guard, box: push.box, options: { timeoutMs: p.timeoutMs, intervalMs: 50 }, log: { warn: () => {} } });
   const app = await new QueueApi({ config, service, db, version: '0.0.0', pusher }).build();
@@ -53,6 +54,22 @@ test('config: push is off without PUSH_SECRETS_KEY; the key must be 32 bytes hex
   assert.throws(() => Config.fromEnv(testEnv({ PUSH_SECRETS_KEY: 'short' })), /64 hex/);
   const c = Config.fromEnv(testEnv({ PUSH_SECRETS_KEY: KEY_HEX }));
   assert.deepEqual([c.push?.allowHttp, c.push?.allowPrivate, c.push?.timeoutMs], [false, false, 10_000]);
+  assert.throws(() => Config.fromEnv(testEnv({ PUSH_SECRETS_KEY: KEY_HEX, PUSH_ALLOW_PRIVATE: 'true' })), /PUSH_ALLOWED_HOSTS is required/);
+  assert.deepEqual(Config.fromEnv(testEnv({ PUSH_SECRETS_KEY: KEY_HEX, PUSH_ALLOW_PRIVATE: 'true', PUSH_ALLOWED_HOSTS: 'Workers.Internal' })).push?.allowedHosts, ['workers.internal']);
+});
+
+test('PushGuard: allowlist after DNS, link-local and metadata always refused', async () => {
+  /** @param {string} address */
+  const dns = (address) => async () => [{ address, family: address.includes(':') ? 6 : 4 }];
+  const open = { allowHttp: true, allowPrivate: true, allowedHosts: ['workers.internal'] };
+  assert.equal((await new PushGuard({ ...open, lookup: dns('10.0.0.5') }).resolve('http://workers.internal/hook')).address, '10.0.0.5', 'listed host on a private address');
+  await assert.rejects(new PushGuard({ ...open, lookup: dns('10.0.0.5') }).resolve('http://other.internal/hook'), /not in TARGET_ALLOWED_HOSTS|PUSH_ALLOWED_HOSTS/);
+  await assert.rejects(new PushGuard({ ...open, lookup: dns('169.254.169.254') }).resolve('http://workers.internal/x'), /link-local or metadata/, 'a listed name that resolves to metadata');
+  await assert.rejects(new PushGuard({ ...open, lookup: dns('169.254.10.1') }).resolve('http://workers.internal/x'), /link-local/);
+  await assert.rejects(new PushGuard({ ...open, lookup: dns('fe80::1') }).resolve('http://workers.internal/x'), /link-local/);
+  await assert.rejects(new PushGuard({ ...open, allowedHosts: ['169.254.169.254'] }).resolve('http://169.254.169.254/latest/meta-data'), /link-local or metadata/, 'even when listed');
+  await assert.rejects(new PushGuard({ allowHttp: false, allowPrivate: false, allowedHosts: [], lookup: dns('10.0.0.5') }).resolve('https://example.com/x'), /non-public/, 'private addresses without PUSH_ALLOW_PRIVATE');
+  assert.equal((await new PushGuard({ allowHttp: false, allowPrivate: false, allowedHosts: [], lookup: dns('93.184.216.34') }).resolve('https://example.com/x')).address, '93.184.216.34');
 });
 
 test('push: due messages are POSTed signed, 2xx acks, pulls are refused, secret never shown', async () => {
@@ -102,7 +119,7 @@ test('push: failures nack with backoff, then dead-letter after maxAttempts; back
 });
 
 test('push: validation (secret on first set, URL guard, disabled server)', async () => {
-  const { app } = await system({ PUSH_ALLOW_HTTP: 'false' });
+  const { app } = await system({ PUSH_ALLOW_HTTP: 'false', PUSH_ALLOWED_HOSTS: '127.0.0.1,example.com' });
   const noSecret = await app.inject({ method: 'PUT', url: '/v1/queues/a', headers: bearer(ADMIN_KEY), payload: { push: { url: 'https://example.com/x' } } });
   assert.equal(noSecret.json().error.code, 'INVALID_ARGUMENT');
   const http = await app.inject({ method: 'PUT', url: '/v1/queues/a', headers: bearer(ADMIN_KEY), payload: { push: { url: 'http://example.com/x', secret: SECRET } } });
