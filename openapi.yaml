@@ -95,7 +95,7 @@ paths:
           description: Queues visible to the key, by name.
           content:
             application/json:
-              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: "#/components/schemas/QueueSummary" } } } }
+              schema: { type: object, required: [items, nextCursor], properties: { items: { type: array, items: { $ref: "#/components/schemas/QueueSummary" } }, nextCursor: { type: "null", description: Always null; the list is complete. } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
@@ -158,6 +158,8 @@ paths:
     parameters: [{ $ref: "#/components/parameters/NameParam" }]
     post:
       operationId: atc-queue.queues.purge
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
       summary: Delete ready, dead or all messages (admin)
       description: "`ready` includes delayed messages; `all` also removes leased ones (their acks then answer `MESSAGE_NOT_FOUND`)."
       tags: [queues]
@@ -177,6 +179,8 @@ paths:
     parameters: [{ $ref: "#/components/parameters/NameParam" }]
     post:
       operationId: atc-queue.queues.redrive
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
       summary: Move dead letters back to ready (admin)
       description: Attempts are reset. Pass `ids` for some, or `all` for every dead letter of the queue.
       tags: [queues]
@@ -196,6 +200,8 @@ paths:
     parameters: [{ $ref: "#/components/parameters/NameParam" }]
     post:
       operationId: atc-queue.messages.enqueue
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
       summary: Enqueue one message (write)
       description: "`201` for a new message; `200` with `deduplicated: true` when a message with the same `dedupeKey` is still in the queue (that message is returned unchanged)."
       tags: [messages]
@@ -236,6 +242,8 @@ paths:
     parameters: [{ $ref: "#/components/parameters/NameParam" }]
     post:
       operationId: atc-queue.messages.enqueueBatch
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
       summary: Enqueue up to MAX_BATCH messages in one transaction (write)
       tags: [messages]
       requestBody:
@@ -390,6 +398,12 @@ components:
       scheme: bearer
       description: "`QUEUE_API_KEYS=id:secret[:role[:queue+queue]]`; role `read`, `write`, `readwrite` (default) or `admin`."
   parameters:
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: "Optional. Repeats of this POST with the same key (per API key, 24 h) replay the first 2xx answer with `Idempotent-Replayed: true` instead of running again; the same key with another method, path or body is `409 IDEMPOTENCY_MISMATCH`, while the first still runs `409 IDEMPOTENCY_IN_PROGRESS`."
+      schema: { type: string, pattern: '^[A-Za-z0-9._:-]{8,255}$' }
     NameParam: { name: name, in: path, required: true, schema: { type: string, pattern: "^[a-z][a-z0-9._-]{0,63}$" } }
     IdParam: { name: id, in: path, required: true, schema: { $ref: "#/components/schemas/MessageId" } }
   requestBodies:

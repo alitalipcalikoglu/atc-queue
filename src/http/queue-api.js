@@ -3,6 +3,7 @@ import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
 import { AuditClient } from '@atc-web/atc-service-core/audit';
 import { createErrorHandler, registerInfo, registerOpenApi, registerProbes, registerRequestContext, requestOptions } from '@atc-web/atc-service-core/fastify';
+import { Idempotency } from '@atc-web/atc-service-core/idempotency';
 import { QueueError } from '../domain/errors.js';
 import { ApiKeyAuth } from './api-key-auth.js';
 import { Schemas } from './schemas.js';
@@ -66,6 +67,8 @@ export class QueueApi {
       reply.header('x-content-type-options', 'nosniff');
       if (!reply.hasHeader('cache-control')) reply.header('cache-control', 'no-store');
     });
+    // Opt-in per route (config.idempotent): repeats with the same Idempotency-Key replay the first 2xx answer.
+    Idempotency.register(app, { raw: this.db.raw });
     registerProbes(app, () => this.db.ping(), { cacheMs: QueueApi.READY_CACHE_MS });
     registerOpenApi(app, new URL('../../openapi.yaml', import.meta.url));
     registerInfo(app, { service: 'atc-queue', version: this.version, capabilities: ['leases', 'delays', 'priorities', 'dedupe', 'dead-letters', 'long-poll', 'queue-scoped-keys', ...(this.pusher ? ['push'] : [])], schemaVersion: this.db.schemaVersion });
@@ -106,7 +109,7 @@ export class QueueApi {
     // ---- queues
     api.get('/queues', read, async (request) => {
       const st = s.stats();
-      return { items: st.items.filter((i) => visible(request, i.queue.name)).map((i) => ({ ...Views.queue(i.queue), ready: i.ready, delayed: i.delayed, leased: i.leased, dead: i.dead, oldestReadySec: i.oldestReadyMs === null ? null : Math.floor(i.oldestReadyMs / 1000) })) };
+      return { items: st.items.filter((i) => visible(request, i.queue.name)).map((i) => ({ ...Views.queue(i.queue), ready: i.ready, delayed: i.delayed, leased: i.leased, dead: i.dead, oldestReadySec: i.oldestReadyMs === null ? null : Math.floor(i.oldestReadyMs / 1000) })), nextCursor: null };
     });
 
     api.put('/queues/:name', { config: { audit: AuditClient.route('atc-queue.queue.upsert', target, (r, b) => ({ created: b.created, settings: QueueApi.redact(r.body) })) }, ...admin, schema: { params: Schemas.queueParams, body: Schemas.putQueue } }, async (request, reply) => {
@@ -125,22 +128,22 @@ export class QueueApi {
       return reply.code(204).send();
     });
 
-    api.post('/queues/:name/purge', { config: { audit: AuditClient.route('atc-queue.queue.purge', target, (r, b) => ({ state: /** @type {any} */ (r.body).state, removed: b.removed })) }, ...admin, schema: { params: Schemas.queueParams, body: Schemas.purge } }, async (request) => ({ removed: s.purge(q(request), /** @type {any} */ (request.body).state) }));
+    api.post('/queues/:name/purge', { config: { idempotent: true, audit: AuditClient.route('atc-queue.queue.purge', target, (r, b) => ({ state: /** @type {any} */ (r.body).state, removed: b.removed })) }, ...admin, schema: { params: Schemas.queueParams, body: Schemas.purge } }, async (request) => ({ removed: s.purge(q(request), /** @type {any} */ (request.body).state) }));
 
-    api.post('/queues/:name/redrive', { config: { audit: AuditClient.route('atc-queue.message.redrive', target, (_r, b) => ({ redriven: b.redriven })) }, ...admin, schema: { params: Schemas.queueParams, body: Schemas.redrive } }, async (request) => {
+    api.post('/queues/:name/redrive', { config: { idempotent: true, audit: AuditClient.route('atc-queue.message.redrive', target, (_r, b) => ({ redriven: b.redriven })) }, ...admin, schema: { params: Schemas.queueParams, body: Schemas.redrive } }, async (request) => {
       const b = /** @type {{ ids?: string[], all?: true }} */ (request.body ?? {});
       if (!b.ids && !b.all) throw new QueueError('INVALID_ARGUMENT', 'name the messages in ids, or pass all: true');
       return { redriven: s.redrive(q(request), b.all ? null : /** @type {string[]} */ (b.ids)) };
     });
 
     // ---- data plane
-    api.post('/queues/:name/messages', { ...write, schema: { params: Schemas.queueParams, body: Schemas.message } }, async (request, reply) => {
+    api.post('/queues/:name/messages', { config: { idempotent: true }, ...write, schema: { params: Schemas.queueParams, body: Schemas.message } }, async (request, reply) => {
       const [r] = s.enqueue(q(request), [/** @type {any} */ (request.body)], request.apiKey.id);
       this.counters.enqueued += r.deduplicated ? 0 : 1;
       return reply.code(r.deduplicated ? 200 : 201).send({ message: Views.message(r.message, now()), deduplicated: r.deduplicated });
     });
 
-    api.post('/queues/:name/messages/batch', { ...write, schema: { params: Schemas.queueParams, body: Schemas.batch } }, async (request, reply) => {
+    api.post('/queues/:name/messages/batch', { config: { idempotent: true }, ...write, schema: { params: Schemas.queueParams, body: Schemas.batch } }, async (request, reply) => {
       const out = s.enqueue(q(request), /** @type {any} */ (request.body).messages, request.apiKey.id);
       this.counters.enqueued += out.filter((r) => !r.deduplicated).length;
       return reply.code(201).send({ items: out.map((r) => ({ message: Views.message(r.message, now()), deduplicated: r.deduplicated })) });

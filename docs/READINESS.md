@@ -34,7 +34,9 @@ For consumers: nack or lease expiry → backoff `base * 2^(attempts-1)` ≤ max;
 `maxAttempts`. The service itself makes no outbound calls besides audit.
 
 ## Idempotency
-Enqueue with a `dedupeKey` is idempotent while the message exists. Ack is fenced on the lease
+Enqueue with a `dedupeKey` is idempotent while the message exists. Enqueue, batch enqueue, purge
+and redrive also honour `Idempotency-Key` (core `Idempotency`, 24 h, per API key and caller): a
+repeat replays the first 2xx answer. Ack is fenced on the lease
 token (a second ack answers 404, a stale token 409). Pull is not idempotent.
 
 ## Backup / restore

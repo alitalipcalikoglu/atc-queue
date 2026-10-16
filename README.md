@@ -45,6 +45,11 @@ Tests and type check: `npm test`, `npm run typecheck`.
 
 Errors: `{ "error": { "code", "message" } }` — `VALIDATION_FAILED`, `INVALID_ARGUMENT` (400), `FORBIDDEN` (403), `QUEUE_NOT_FOUND`, `MESSAGE_NOT_FOUND` (404), `LEASE_LOST`, `QUEUE_FULL`, `QUEUE_NOT_EMPTY`, `INVALID_STATE`, `LIMIT_EXCEEDED` (409), `MESSAGE_TOO_LARGE` (413), `RATE_LIMITED` (429). Full contract: [openapi.yaml](openapi.yaml).
 
+## Conventions
+
+- Lists answer `{ items, nextCursor }`; pass `nextCursor` back as `cursor`. Queues are a complete list (`nextCursor: null`); messages page in queue order. Messages have `msg_<time><random>` ids (the platform's one id format); queue names are natural keys.
+- Enqueue, batch enqueue, purge and redrive honour `Idempotency-Key`: a repeat with the same key (per API key and caller — the console's `X-Actor` counts — for 24 h) replays the first 2xx answer with `Idempotent-Replayed: true`; another body is `409 IDEMPOTENCY_MISMATCH`. `dedupeKey` still deduplicates while the message exists. Pull, ack, nack and extend are never replayed.
+
 ## Examples
 
 Producing, consuming with a worker loop, retries and dead letters, scoped keys: [examples/README.md](examples/README.md).

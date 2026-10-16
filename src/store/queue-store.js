@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Ids } from '@atc-web/atc-service-core/ids';
 
 /** @typedef {import('../db.js').Database} Database */
 /** @typedef {import('../types.js').QueueRow} QueueRow */
@@ -56,7 +57,7 @@ export class QueueStore {
 
   /** Time-ordered, unique message id. */
   static newId() {
-    return `msg_${Date.now().toString(36)}${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    return Ids.create('msg');
   }
 
   /** @param {QueueRow} q */
